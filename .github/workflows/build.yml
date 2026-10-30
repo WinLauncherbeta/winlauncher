@@ -13,7 +13,7 @@ jobs:
       - name: Descompactar projeto
         run: |
           mkdir -p proj
-          unzip -o project.zip -d proj
+          unzip -o "$(ls -t *.zip | head -n 1)" -d proj
 
       - uses: actions/setup-java@v4
         with:
