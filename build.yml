@@ -1,0 +1,130 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+# ---------------------------------------------------------------------------
+# ZIPs usados na montagem do projeto (na raiz do repositório).
+#
+# BASE_ZIP    : ZIP COMPLETO (settings.gradle.kts, build.gradle.kts, app/,
+#               AndroidManifest.xml). Fixo, NUNCA escolhido por data.
+# UPDATE_ZIPS : ZIPs parciais, um por linha, aplicados por cima da base
+#               NA ORDEM em que estão listados (o último vence).
+#
+# Para uma nova atualização parcial, basta subir o ZIP e acrescentar uma
+# linha em UPDATE_ZIPS. Para um novo ZIP completo, troque BASE_ZIP e limpe
+# a lista (ou mantenha só as atualizações posteriores a ele).
+# ---------------------------------------------------------------------------
+env:
+  BASE_ZIP: project__1___6_.zip
+  UPDATE_ZIPS: |
+    project__1_.zip
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Montar projeto (base completa + atualizações parciais)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "ZIPs na raiz do repositório:"
+          ls -la -- *.zip 2>/dev/null || true
+
+          if [ ! -f "$BASE_ZIP" ]; then
+            echo "::error::BASE_ZIP '$BASE_ZIP' não existe na raiz do repositório."
+            echo "ZIPs completos (com settings.gradle.kts) encontrados:"
+            for z in *.zip; do
+              lista="$(unzip -Z1 "$z")"
+              if grep -qx 'settings.gradle.kts' <<< "$lista"; then echo "  completo: $z"; fi
+            done
+            exit 1
+          fi
+
+          # A base precisa ser um projeto Gradle completo
+          # (lista lida uma vez: "unzip | grep -q" com pipefail falha por SIGPIPE)
+          base_lista="$(unzip -Z1 "$BASE_ZIP")"
+          for req in settings.gradle.kts build.gradle.kts app/build.gradle.kts app/src/main/AndroidManifest.xml; do
+            if ! grep -qx "$req" <<< "$base_lista"; then
+              echo "::error::BASE_ZIP '$BASE_ZIP' não contém '$req' (não é um projeto completo)."
+              exit 1
+            fi
+          done
+
+          rm -rf proj
+          mkdir -p proj
+          unzip -q -o "$BASE_ZIP" -d proj
+          echo "Base aplicada: $BASE_ZIP"
+
+          # Atualizações parciais por cima, na ordem listada
+          while IFS= read -r upd; do
+            upd="$(echo "$upd" | xargs)"
+            [ -z "$upd" ] && continue
+            if [ ! -f "$upd" ]; then
+              echo "::error::Atualização '$upd' listada em UPDATE_ZIPS não existe no repositório."
+              exit 1
+            fi
+            unzip -q -o "$upd" -d proj
+            # confirma que cada arquivo da atualização ficou igual ao do ZIP
+            tmp="$(mktemp -d)"
+            unzip -q "$upd" -d "$tmp"
+            n=0
+            while IFS= read -r f; do
+              [ -d "$tmp/$f" ] && continue
+              cmp -s "$tmp/$f" "proj/$f" || { echo "::error::'$f' de $upd não foi aplicado corretamente."; exit 1; }
+              n=$((n+1))
+            done < <(cd "$tmp" && find . -type f | sed 's|^\./||')
+            echo "Atualização aplicada: $upd ($n arquivos)"
+            rm -rf "$tmp"
+          done <<< "$UPDATE_ZIPS"
+
+      - name: Localizar raiz Gradle
+        id: root
+        shell: bash
+        run: |
+          set -euo pipefail
+          # settings.gradle.kts mais próximo de proj/, ignorando backups,
+          # harness e o app Remote (projeto independente)
+          settings="$(find proj -maxdepth 3 -name settings.gradle.kts \
+            -not -path '*/_*' -not -path '*/WinLauncherRemote/*' \
+            | awk '{ print gsub("/","/") " " $0 }' | sort -n | head -n 1 | cut -d' ' -f2-)"
+          if [ -z "$settings" ]; then
+            echo "::error::settings.gradle.kts não encontrado em proj/."
+            find proj -maxdepth 2 | head -50
+            exit 1
+          fi
+          root="$(dirname "$settings")"
+          for req in build.gradle.kts app/build.gradle.kts app/src/main/AndroidManifest.xml; do
+            [ -f "$root/$req" ] || { echo "::error::$root não tem $req"; exit 1; }
+          done
+          echo "Raiz Gradle: $root"
+          echo "dir=$root" >> "$GITHUB_OUTPUT"
+          ls -la "$root"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Compilar (assembleDebug)
+        working-directory: ${{ steps.root.outputs.dir }}
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Listar APKs gerados
+        run: ls -la "${{ steps.root.outputs.dir }}/app/build/outputs/apk/debug/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WinLauncher-apk
+          path: ${{ steps.root.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
