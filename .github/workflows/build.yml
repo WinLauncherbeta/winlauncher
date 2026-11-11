@@ -22,32 +22,38 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Extrair e localizar WinLauncher principal
+      - name: Extrair projeto
+        shell: bash
         run: |
           set -e
           test -f "project (1).zip"
           mkdir proj
           unzip -q "project (1).zip" -d proj
 
-          MATCHES=""
-          while IFS= read -r SETTINGS; do
-            ROOT="$(dirname "$SETTINGS")"
-            for APP in "$ROOT"/app/build.gradle "$ROOT"/app/build.gradle.kts; do
-              if [ -f "$APP" ] && grep -q 'com.example.winlauncher' "$APP"; then
-                MATCHES="${MATCHES}${ROOT}"$'\n'
+      - name: Localizar WinLauncher principal
+        shell: bash
+        run: |
+          set -e
+          MATCHES=$(find proj -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print0 |
+            while IFS= read -r -d '' SETTINGS; do
+              ROOT="$(dirname "$SETTINGS")"
+              if grep -q 'com.example.winlauncher' "$ROOT"/app/build.gradle "$ROOT"/app/build.gradle.kts 2>/dev/null; then
+                echo "$ROOT"
               fi
-            done
-          done < <(find proj -type f \( -name settings.gradle -o -name settings.gradle.kts \))
+            done | sort -u)
 
-          COUNT=$(printf '%s' "$MATCHES" | grep -c . || true)
+          COUNT=$(printf '%s\n' "$MATCHES" | sed '/^$/d' | wc -l)
+
           if [ "$COUNT" -ne 1 ]; then
-            echo "Erro: esperado exatamente um projeto WinLauncher principal. Encontrados: $COUNT"
+            echo "Projetos encontrados:"
+            echo "$MATCHES"
+            echo "Esperado: 1 projeto principal. Encontrados: $COUNT"
             exit 1
           fi
 
-          PROJECT_DIR=$(printf '%s' "$MATCHES" | head -n 1)
+          PROJECT_DIR=$(printf '%s\n' "$MATCHES" | head -n 1)
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "WinLauncher principal localizado: $PROJECT_DIR"
+          echo "WinLauncher localizado: $PROJECT_DIR"
 
       - name: Configurar Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
@@ -63,3 +69,4 @@ jobs:
           name: WinLauncher-apk
           path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
