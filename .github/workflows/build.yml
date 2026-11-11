@@ -11,19 +11,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Baixar projeto
         uses: actions/checkout@v4
 
-      - name: Configurar Java 17
+      - name: Configurar Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Extrair projeto
-        shell: bash
         run: |
           set -e
           test -f "project (1).zip"
@@ -31,29 +29,22 @@ jobs:
           unzip -q "project (1).zip" -d proj
 
       - name: Localizar WinLauncher principal
-        shell: bash
         run: |
           set -e
-          MATCHES=$(find proj -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print0 |
-            while IFS= read -r -d '' SETTINGS; do
-              ROOT="$(dirname "$SETTINGS")"
-              if grep -q 'com.example.winlauncher' "$ROOT"/app/build.gradle "$ROOT"/app/build.gradle.kts 2>/dev/null; then
-                echo "$ROOT"
-              fi
-            done | sort -u)
+          ROOT="proj"
 
-          COUNT=$(printf '%s\n' "$MATCHES" | sed '/^$/d' | wc -l)
-
-          if [ "$COUNT" -ne 1 ]; then
-            echo "Projetos encontrados:"
-            echo "$MATCHES"
-            echo "Esperado: 1 projeto principal. Encontrados: $COUNT"
+          if ! find "$ROOT/app" -maxdepth 1 -type f \( -name build.gradle -o -name build.gradle.kts \) -exec grep -l 'com.example.winlauncher' {} \; | grep -q .; then
+            echo "O projeto principal não foi encontrado diretamente em proj/app."
             exit 1
           fi
 
-          PROJECT_DIR=$(printf '%s\n' "$MATCHES" | head -n 1)
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "WinLauncher localizado: $PROJECT_DIR"
+          if [ ! -f "$ROOT/settings.gradle" ] && [ ! -f "$ROOT/settings.gradle.kts" ]; then
+            echo "O settings.gradle não foi encontrado em proj."
+            exit 1
+          fi
+
+          echo "Projeto principal confirmado em proj"
+          echo "PROJECT_DIR=proj" >> "$GITHUB_ENV"
 
       - name: Configurar Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
@@ -67,6 +58,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: WinLauncher-apk
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          path: proj/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
 
