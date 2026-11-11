@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Baixar arquivos do repositório
+      - name: Baixar projeto
         uses: actions/checkout@v4
 
       - name: Configurar Java 17
@@ -22,30 +22,44 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Extrair projeto completo
+      - name: Extrair e localizar WinLauncher principal
         run: |
           set -e
           test -f "project (1).zip"
-          mkdir projeto
-          unzip -q "project (1).zip" -d projeto
-          GRADLE_FILE=$(find projeto -type f \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
-          test -n "$GRADLE_FILE"
-          PROJECT_DIR=$(dirname "$GRADLE_FILE")
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Projeto encontrado em: $PROJECT_DIR"
+          mkdir proj
+          unzip -q "project (1).zip" -d proj
 
-      - name: Configurar Gradle
+          MATCHES=""
+          while IFS= read -r SETTINGS; do
+            ROOT="$(dirname "$SETTINGS")"
+            for APP in "$ROOT"/app/build.gradle "$ROOT"/app/build.gradle.kts; do
+              if [ -f "$APP" ] && grep -q 'com.example.winlauncher' "$APP"; then
+                MATCHES="${MATCHES}${ROOT}"$'\n'
+              fi
+            done
+          done < <(find proj -type f \( -name settings.gradle -o -name settings.gradle.kts \))
+
+          COUNT=$(printf '%s' "$MATCHES" | grep -c . || true)
+          if [ "$COUNT" -ne 1 ]; then
+            echo "Erro: esperado exatamente um projeto WinLauncher principal. Encontrados: $COUNT"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(printf '%s' "$MATCHES" | head -n 1)
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "WinLauncher principal localizado: $PROJECT_DIR"
+
+      - name: Configurar Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: Compilar APK
-        run: gradle -p "$PROJECT_DIR" assembleDebug --no-daemon
+      - name: Compilar WinLauncher
+        run: gradle -p "$PROJECT_DIR" :app:assembleDebug --no-daemon
 
       - name: Enviar APK
         uses: actions/upload-artifact@v4
         with:
           name: WinLauncher-apk
-          path: projeto/**/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-
